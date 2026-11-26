@@ -13,13 +13,27 @@ BOOL_FNS = r"(?:hasFeature|isFeatureEnabled|is_feature_enabled|IsFeatureEnabled|
 VALUE_FNS = r"(?:getValue|getFeatureValue|get_feature_value|GetFeatureValue)"
 
 
+EXP_FNS = r"(?:getExperimentFlag|get_experiment_flag|GetExperimentFlag)"
+_RECV = r"(?:[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*\??\.)?"
+_EXTRA_ARGS = r"(?:\s*,[^()]*(?:\([^()]*\)[^()]*)*)?"
+
+
 def call_pattern(key: str, kind: str = "any") -> re.Pattern:
-    fns = {"bool": BOOL_FNS, "value": VALUE_FNS}.get(kind, f"(?:{BOOL_FNS}|{VALUE_FNS})")
-    return re.compile(
-        r"(?:[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*\??\.)?"
-        + fns
-        + r"\(\s*['\"`]" + re.escape(key) + r"['\"`]\s*\)"
-    )
+    """Regex for SDK calls that read flag `key`.
+
+    kind: "bool"      hasFeature("k"), is_feature_enabled("k"), getExperimentFlag("k").enabled
+          "value"     getValue("k"), get_feature_value("k"), getExperimentFlag("k", ...).value
+          "any"       all of the above
+    """
+    k = r"['\"`]" + re.escape(key) + r"['\"`]"
+    plain = lambda fns: _RECV + fns + r"\(\s*" + k + r"\s*\)"
+    exp = lambda attr: _RECV + EXP_FNS + r"\(\s*" + k + _EXTRA_ARGS + r"\s*\)\??\." + attr + r"\b"
+    parts = {
+        "bool": [plain(BOOL_FNS), exp("(?:enabled|Enabled)")],
+        "value": [plain(VALUE_FNS), exp("(?:value|Value)")],
+    }
+    chosen = parts.get(kind, parts["bool"] + parts["value"])
+    return re.compile("|".join(f"(?:{c})" for c in chosen))
 
 
 def iter_code_files(root: Path):
@@ -86,8 +100,10 @@ def classify(snapshot: dict, refs: dict[str, list[str]], stale_days: int = 30,
 
         if not r:
             verdict, reason = "orphan", "no references in code"
+        elif f.get("experiment"):
+            verdict, reason = "active", f["experiment"]
         elif f.get("multivariate"):
-            verdict, reason = "active", "multivariate / experiment"
+            verdict, reason = "active", "variants still split traffic"
         elif overrides:
             verdict, reason = "active", f"{overrides} segment/identity override(s)"
         elif missing:

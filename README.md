@@ -1,46 +1,108 @@
-# 🪓 Flag Reaper
+# Flag Reaper
 
-**Flag debt cleanup for [Flagsmith](https://flagsmith.com): an agent finds the flags that stopped doing work, removes their dead code, opens the PR and archives the flag. A human approves every write.**
+**Finish what your A/B test started.**
 
-Built for **Toggle Wars, the Flagsmith Experimentation Hackathon**. Track 02 (AI Agents and Feature Flags), also packaged as a Track 04 Agent Skill ([`skill/SKILL.md`](skill/SKILL.md)).
+Flag Reaper reads your Flagsmith Experimentation result, rolls out the winner, deletes the losing variant's code in a pull request, and archives the flag. It also finds every other flag that has stopped doing work. It asks a human before every change.
 
-**Demo video (1:40):** [`demo/flag-reaper-demo.mp4`](demo/flag-reaper-demo.mp4) · **Real PR opened by the tool:** [flag-reaper-demo-shop#1](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/1)
+Built for **Toggle Wars, the Flagsmith Experimentation Hackathon**. Track 02 (AI Agents and Feature Flags), also shipped as an Agent Skill for Track 04.
+
+| | |
+|---|---|
+| 🎬 **Demo video** (2 min, everything live) | [`demo/flag-reaper-demo.mp4`](demo/flag-reaper-demo.mp4) |
+| 🔀 **Pull request opened by the tool** | [flag-reaper-demo-shop#2](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/2) |
+| 🤖 **Agent Skill** | [`skill/SKILL.md`](skill/SKILL.md) |
+
+---
 
 ## The problem
 
-Every experiment and rollout leaves a flag behind. Once the winner ships to 100%, the flag check and the losing branch stay in the code. Nobody knows which flags are safe to delete, so nobody deletes them. The result is dead code paths, more combinations to test, and dashboards full of flags nobody trusts.
+An A/B test ends and someone ships the winner to 100%. Then everyone moves on.
 
-## What it does
+The flag check stays in the code, and so does the losing variant. Multiply that by every experiment and every rollout, and after a year nobody knows which flags are safe to delete. So nobody deletes them. You end up with dead code, more paths to test, and a flag dashboard nobody trusts.
+
+The hard part isn't deleting code. It's knowing, with evidence, that a flag is finished, then doing the four chores in the right order without breaking anything.
+
+## What Flag Reaper does
 
 ```
-flagreaper scan        →  reads Flagsmith + greps your code, gives each flag a verdict
-flagreaper reap <flag> →  rewrites code to keep only the live branch, shows diff,
-                          asks you, branches, commits, pushes, opens a PR (gh)
-flagreaper archive <f> →  after merge: checks no reference remains, asks you, archives in Flagsmith
+1  scan      read every flag from Flagsmith, find where the code uses it, give each one a verdict
+2  close     read the experiment result, end it, roll the winner out everywhere
+3  reap      delete the losing code, keep the winner, open a pull request
+4  archive   once the PR is merged, archive the flag in Flagsmith
 ```
 
-| Verdict | Rule (all environments) | Action |
+### 1 · scan
+
+```
+FLAG                VERDICT    REFS  REASON
+max_upload_mb       stale_on      2  ON in all 3 envs, unchanged 209d
+legacy_banner       stale_off     3  OFF in all 3 envs, unchanged 269d
+old_onboarding_v1   orphan        0  no references in code
+beta_search         active        1  1 segment/identity override(s)
+dark_mode           active        1  differs across environments
+pricing_experiment  active        1  experiment running in Production
+```
+
+| Verdict | Means | What Flag Reaper offers |
 |---|---|---|
-| `stale_on` | enabled everywhere, same value, no segment/identity overrides, unchanged ≥ 30 days | inline the ON branch |
-| `stale_off` | disabled everywhere, no overrides, unchanged ≥ 30 days | delete the ON branch |
-| `orphan` | exists in Flagsmith, no reference in code | archive only |
-| `active` | differs per env, has overrides, multivariate/experiment, or recently changed | **refused, never touched** |
+| `stale_on` | on in every environment, same value, no overrides, unchanged for 30+ days | keep the ON code, delete the check |
+| `stale_off` | off everywhere, same conditions | delete the ON code |
+| `orphan` | exists in Flagsmith, never used in code | archive only |
+| `active` | anything else: an experiment is running, variants split traffic, segment or identity overrides, environments differ, or a recent change | **nothing. Refused.** |
 
-### Where it stops for a person
+### 2 · close (Flagsmith Experimentation)
 
-| Step | Automatic | Needs approval |
+```
+pricing_experiment · "Annual vs monthly plan first" · Production · running
+Metric: Checkout started (higher is better)
+
+VARIANT                   USERS CONVERTED    RATE   LIFT  CHANCE TO BE BEST
+monthly_first (control)     385        38    9.9%      —      0.4%
+annual_first                415        80   19.3%   +95%     99.6%  ← winner
+
+Decision: annual_first wins: 99.6% chance to be best (threshold 95%)
+? End the experiment and send 100% of Production to 'annual_first'? [y/N] y
+? Make 'annual_first' the flag's value in every environment? [y/N] y
+```
+
+The numbers come from Flagsmith's own Bayesian engine. Flag Reaper only applies your rule: a variant must reach 95% chance to be best, with at least 50 users per variant (both configurable). If there's no clear winner, it says so and changes nothing.
+
+### 3 · reap
+
+```diff
+   // A/B test "Annual vs monthly plan first" (Flagsmith Experimentation)
+-  if (flagsmith.getExperimentFlag("pricing_experiment").value === "annual_first") {
+-    return renderPlans(["annual", "monthly"]);
+-  } else {
+-    return renderPlans(["monthly", "annual"]);
+-  }
++  return renderPlans(["annual", "monthly"]);
+```
+
+It shows the diff, asks, commits on a new branch, asks again, then pushes and opens a PR. The PR description carries the evidence from Flagsmith.
+
+### 4 · archive
+
+`archive` refuses while any code still references the flag, so a flag is never archived while it's still being evaluated. Once the PR is merged, it asks and then archives. Archiving can be undone in Flagsmith; nothing is deleted.
+
+## Where it stops for a person
+
+| Step | Automatic | Asks first |
 |---|---|---|
-| Read Flagsmith, scan code, classify | ✅ | |
-| Show the diff (`--dry-run`) | ✅ | |
-| Write source files | | ✅ |
-| Push branch + open PR | | ✅ |
-| Archive the flag in Flagsmith | | ✅, and refused while code still references it |
+| Read Flagsmith, read results, scan code, show the diff | ✅ | |
+| End the experiment and roll out the winner | | ✅ |
+| Set the winning value in every environment | | ✅ |
+| Write code changes | | ✅ |
+| Push and open the PR | | ✅ |
+| Archive the flag | | ✅ (and refused while code still uses it) |
 
-With no TTY (CI, a coding agent), every write is refused unless `--yes` is passed, so an agent must ask in chat first. The skill tells it to.
+Without a terminal (CI, a coding agent), every change is refused unless `--yes` is passed. The Agent Skill tells the agent to ask in chat before it ever passes `--yes`.
 
-## Quick start (offline demo, 30 seconds)
+---
 
-No account needed, stdlib Python ≥ 3.9, zero dependencies:
+## Try it in 30 seconds (no account needed)
+
+Python 3.9+, no dependencies.
 
 ```bash
 git clone https://github.com/karanjakhar/flag-reaper && cd flag-reaper
@@ -48,96 +110,75 @@ python3 -m flagreaper scan --repo examples/demo-app --demo examples/demo-flags.j
 python3 -m flagreaper reap new_checkout --repo examples/demo-app --demo examples/demo-flags.json --dry-run
 ```
 
-```
-FLAG                VERDICT    REFS  REASON
-max_upload_mb       stale_on      2  ON in all 3 envs, unchanged 209d
-new_checkout        stale_on      3  ON in all 3 envs, unchanged 284d
-legacy_banner       stale_off     3  OFF in all 3 envs, unchanged 269d
-old_onboarding_v1   orphan        0  no references in code
-beta_search         active        1  2 segment/identity override(s)
-dark_mode           active        1  differs across environments
-pricing_experiment  active        1  multivariate / experiment
-```
+`--demo` reads an offline snapshot instead of the API. `close` needs a live project.
 
-```diff
--  if (flagsmith.hasFeature("new_checkout")) {
--    // one-page checkout, shipped to 100% in February
--    return onePageCheckout(cart, total);
--  } else {
--    return legacyThreeStepCheckout(cart, total);
--  }
-+  // one-page checkout, shipped to 100% in February
-+  return onePageCheckout(cart, total);
-...
--export const showBadge = () => (flagsmith.hasFeature("new_checkout") ? "new" : "");
-+export const showBadge = () => "new";
-```
-
-## Against your real Flagsmith project
+## Use it on your project
 
 ```bash
 pip install git+https://github.com/karanjakhar/flag-reaper
-export FLAGSMITH_API_TOKEN=<organisation API key>   # Organisation settings → API Keys
-export FLAGSMITH_PROJECT_ID=<id>                    # from the project URL
-# self-hosted: export FLAGSMITH_API_URL=https://flags.example.com/api/v1
-# or put these lines in a .env file (cwd, --repo dir, or ~/.config/flagreaper/.env)
+
+# .env in your app's folder (or real environment variables)
+FLAGSMITH_API_TOKEN=...      # Flagsmith → Account settings → API key
+FLAGSMITH_PROJECT_ID=...     # the number in your project's URL
+# FLAGSMITH_API_URL=https://flags.example.com/api/v1   # self-hosted
 
 cd your-app
 flagreaper scan
-flagreaper reap legacy_banner     # diff → y → branch, commit → y → PR
-# ...merge, deploy...
-flagreaper archive legacy_banner  # verifies no refs → y → archived
+flagreaper close pricing_experiment
+flagreaper reap pricing_experiment
+flagreaper archive pricing_experiment   # after the PR is merged
 ```
 
-Works with Flagsmith Cloud and self-hosted (same Admin API).
+Works with Flagsmith Cloud and self-hosted, and with v1 and v2 feature versioning.
 
 ## Use it from a coding agent
 
-Copy [`skill/SKILL.md`](skill/SKILL.md) into your agent's skills folder (e.g. `.claude/skills/flagsmith-flag-reaper/SKILL.md`), then ask *"clean up our stale flags"*. The agent:
+Copy [`skill/SKILL.md`](skill/SKILL.md) to your agent's skills folder (for Claude Code: `.claude/skills/flagsmith-flag-reaper/SKILL.md`), then ask: *"close the pricing experiment and clean up the flag"*, or *"clean up our stale flags"*.
 
-1. runs `flagreaper scan --json --only stale_on,stale_off,orphan`: one compact line per debt flag, so it costs few tokens;
-2. asks you which to reap, shows the `--dry-run` diff;
-3. applies and opens the PR only after you say yes;
-4. archives only after you confirm the merge.
+The agent runs `flagreaper scan --json`, which returns one short line per flag so it costs few tokens. It shows you each diff and result, and only passes `--yes` for a step after you approve it in chat.
 
 ```json
-[{"flag":"new_checkout","v":"stale_on","why":"ON in all 3 envs, unchanged 284d","refs":3}, ...]
+[{"flag":"legacy_banner","v":"stale_off","why":"OFF in all 3 envs, unchanged 269d","refs":3}]
 ```
 
-Weekly report in CI: [`examples/flag-debt-report.yml`](examples/flag-debt-report.yml).
+A weekly flag-debt report for CI: [`examples/flag-debt-report.yml`](examples/flag-debt-report.yml).
 
-## What the rewriter understands
+## What the code rewriter understands
 
 | Pattern | Languages |
 |---|---|
 | `if [not] flags.is_feature_enabled("k"):` … `elif` … `else:` | Python |
-| `if ([!]flagsmith.hasFeature("k")) {…} else if (…) {…} else {…}` | JS/TS, Java, Kotlin, Dart, Go (brace style) |
-| `cond ? a : b` / `a if cond else b` with the flag as condition | JS/TS, Python |
-| `getValue("k")`, `get_feature_value("k")` | replaced by the flag's value |
-| any other call | replaced by `true`/`false` |
+| `if ([!]flagsmith.hasFeature("k")) {…} else if (…) {…} else {…}` | JS/TS, Java, Kotlin, Go, Dart |
+| `getExperimentFlag("k").value === "annual_first"` and `get_experiment_flag("k", identifier=…).value == …` | experiment flags |
+| `getValue("k")`, `get_feature_value("k")` | replaced by the final value, comparisons folded |
+| `cond ? a : b`, `a if cond else b` | JS/TS, Python |
 
-SDK calls recognised: `hasFeature`, `isFeatureEnabled`, `is_feature_enabled`, `IsFeatureEnabled`, `getValue`, `getFeatureValue`, `get_feature_value`. If a flag is referenced some other way (e.g. a constant), `reap` lists the references and stops so you can edit by hand.
+Only expressions that come from the flag being removed are ever folded. An unrelated `if (true)` elsewhere is left alone. When a flag is used in a way the rewriter doesn't recognise (for example stored in a constant), `reap` lists the places and stops so you can edit them by hand.
 
-## Safety notes
+## Honest notes
 
-- Verdicts are conservative: any override, any env difference, any multivariate option, or a change in the last N days (`--stale-days`) → `active`.
-- Code changes ship first, the flag is archived last. Archiving a flag that is still evaluated would flip users to the default.
-- Archive is reversible in Flagsmith (unarchive); nothing is deleted.
-- Known gap: Edge identity overrides are not visible through the endpoints used; check them for flags used with per-user targeting.
+- Verdicts are cautious on purpose. If an override count can't be read, the flag counts as `active`.
+- Code changes ship first and the flag is archived last. Archiving a flag that's still evaluated would flip users to the default.
+- Edge identity overrides aren't visible through the endpoints used. Check those flags yourself if you target individual users.
+- Ending an experiment and setting its result use endpoints from Flagsmith's coding-agent guide, plus `experiments/<id>/complete/` (found by testing on throwaway flags, not yet in the public docs).
+- The demo experiment uses simulated traffic (800 users through the official Python SDK), which the hackathon allows.
 
-## Re-making the demo video
+## Reproduce the demo
 
 ```bash
-python3 demo/record.py <demo-app-git-repo>   # runs real commands in a pty, answers prompts, opens a real PR
-python3 demo/render.py                       # transcript.json -> demo/flag-reaper-demo.mp4 (Pillow + ffmpeg)
+python3 demo/seed_flagsmith.py                 # 3 environments, 7 flags, a segment override, an A/B flag
+.venv/bin/python demo/simulate_traffic.py --flag pricing_experiment --event checkout_started \
+    --users 800 --rate monthly_first=0.10 --rate annual_first=0.16
+python3 demo/record.py ../flag-reaper-demo-shop   # runs the real commands, answers the prompts
+python3 demo/render.py                          # transcript -> demo/flag-reaper-demo.mp4
 ```
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 20 tests, incl. end-to-end on the demo app
+python3 -m unittest discover -s tests -v   # 30 tests, including end-to-end runs on the demo app
 ```
 
-Layout: `flagreaper/api.py` (Flagsmith Admin API + demo client), `analyze.py` (refs + verdicts), `rewrite.py` (code surgery), `cli.py` (commands + approval gates).
+`flagreaper/api.py` talks to Flagsmith, `analyze.py` decides verdicts, `rewrite.py` edits code, `cli.py` holds the commands and approval prompts.
 
 MIT licensed.

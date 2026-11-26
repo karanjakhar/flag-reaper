@@ -1,18 +1,30 @@
-"""Rewrite source so a stale flag's check disappears and only the live branch stays.
+"""Rewrite source so a retired flag's checks disappear and only the live branch stays.
 
-Handles:
-  * Python  `if [not] flags.is_feature_enabled("k"):` ... [elif ...] [else: ...]
-  * C-like  `if ([!]flagsmith.hasFeature("k")) { ... } [else if (...) {...}] [else { ... }]`
-  * any other call site -> replaced by a literal (`true`/`True`, or the flag value)
+How it works (one flag at a time):
+  1. Every SDK call for the flag is replaced by a private marker:
+       hasFeature("k") / is_feature_enabled("k")  ->  ⟦T⟧ or ⟦F⟧
+       getValue("k") / get_feature_value("k")      ->  ⟦v:<literal>⟧
+  2. Markers are folded: `⟦v:"a"⟧ === "a"` -> ⟦T⟧, `!⟦T⟧` -> ⟦F⟧, `not ⟦F⟧` -> ⟦T⟧.
+  3. `if`/`else` statements and ternaries whose condition is a marker keep only the live branch:
+       Python  if / elif / else
+       C-like  if (...) {...} else if (...) {...} else {...}   (JS/TS, Java, Kotlin, Go, Dart)
+  4. Remaining markers become plain literals (`true`, `True`, `"annual_first"`, `50`).
+
+Because folding only ever looks at markers, unrelated code (even an existing `if (true)`) is never touched.
 """
 from __future__ import annotations
 
+import ast
 import difflib
 import json
 import re
 from pathlib import Path
 
 from .analyze import call_pattern, iter_code_files
+
+T, F = "⟦T⟧", "⟦F⟧"
+VAL = re.compile(r"⟦v:(.*?)⟧")
+BOOL = r"(?:⟦T⟧|⟦F⟧)"
 
 # --------------------------------------------------------------------------- helpers
 
@@ -22,21 +34,50 @@ def _indent(line: str) -> int:
 
 
 def _dedent(lines: list[str], n: int) -> list[str]:
-    out = []
-    for ln in lines:
-        k = min(n, _indent(ln))
-        out.append(ln[k:])
-    return out
+    return [ln[min(n, _indent(ln)):] for ln in lines]
 
 
-def _literal(value, enabled: bool, kind: str, lang: str) -> str:
-    if kind == "bool":
-        if lang == "py":
-            return "True" if enabled else "False"
-        return "true" if enabled else "false"
+def _lit(value, lang: str) -> str:
     if lang == "py":
         return repr(value)
     return json.dumps(value)
+
+
+def _parse(lit: str, lang: str):
+    try:
+        return ast.literal_eval(lit) if lang == "py" else json.loads(lit.replace("'", '"') if lit[:1] == "'" else lit)
+    except (ValueError, SyntaxError):
+        raise ValueError(lit) from None
+
+
+_STR_OR_NUM = r"(\"[^\"\n]*\"|'[^'\n]*'|-?\d+(?:\.\d+)?|true|false|True|False|None|null)"
+
+
+def _fold(text: str, lang: str) -> str:
+    """Fold comparisons and negations that involve markers, until nothing changes."""
+    def cmp(a, op, b):
+        try:
+            x, y = _parse(a, lang), _parse(b, lang)
+        except ValueError:
+            return None
+        eq = x == y
+        return T if (eq if op in ("==", "===") else not eq) else F
+
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r"⟦v:(.*?)⟧\s*(===|!==|==|!=)\s*" + _STR_OR_NUM,
+                      lambda m: cmp(m.group(1), m.group(2), m.group(3)) or m.group(0), text)
+        text = re.sub(_STR_OR_NUM + r"\s*(===|!==|==|!=)\s*⟦v:(.*?)⟧",
+                      lambda m: cmp(m.group(3), m.group(2), m.group(1)) or m.group(0), text)
+        if lang == "py":
+            text = re.sub(r"\bnot\s+⟦T⟧", F, text)
+            text = re.sub(r"\bnot\s+⟦F⟧", T, text)
+        else:
+            text = re.sub(r"!\s*⟦T⟧", F, text)
+            text = re.sub(r"!\s*⟦F⟧", T, text)
+        text = re.sub(r"\(\s*(" + BOOL + r")\s*\)", r"\1", text)
+    return text
 
 
 # --------------------------------------------------------------------------- python
@@ -44,8 +85,7 @@ def _literal(value, enabled: bool, kind: str, lang: str) -> str:
 
 def _py_block_end(lines: list[str], start: int, base: int) -> int:
     """Index after the indented block that begins at `start`."""
-    j = start
-    last = start - 1
+    j, last = start, start - 1
     while j < len(lines):
         ln = lines[j]
         if ln.strip() == "":
@@ -58,9 +98,13 @@ def _py_block_end(lines: list[str], start: int, base: int) -> int:
     return last + 1
 
 
-def _rewrite_python(text: str, key: str, enabled: bool) -> str:
-    call = call_pattern(key, "bool").pattern
-    head = re.compile(r"^(\s*)if\s+(not\s+)?\(?\s*" + call + r"\s*\)?\s*:\s*(#.*)?$")
+def _body(lines: list[str], base: int) -> list[str]:
+    first = next((b for b in lines if b.strip()), None)
+    return _dedent(lines, _indent(first) - base) if first is not None else []
+
+
+def _rewrite_python(text: str) -> str:
+    head = re.compile(r"^(\s*)if\s+(" + BOOL + r")\s*:\s*(#.*)?$")
     lines = text.split("\n")
     i = 0
     while i < len(lines):
@@ -69,7 +113,7 @@ def _rewrite_python(text: str, key: str, enabled: bool) -> str:
             i += 1
             continue
         base = _indent(lines[i])
-        keep_if = enabled != bool(m.group(2))
+        keep_if = m.group(2) == T
         if_end = _py_block_end(lines, i + 1, base)
         branches = [("if", i, if_end)]
         j = if_end
@@ -91,17 +135,13 @@ def _rewrite_python(text: str, key: str, enabled: bool) -> str:
         chain_end = branches[-1][2]
 
         if keep_if:
-            body = lines[i + 1:if_end]
-            new = _dedent(body, _indent(next(b for b in body if b.strip())) - base) if body else []
+            new = _body(lines[i + 1:if_end], base)
         elif len(branches) > 1 and branches[1][0] == "elif":
-            # drop the if-block, promote elif -> if
             _, s, _ = branches[1]
-            promoted = re.sub(r"^(\s*)elif\b", r"\1if", lines[s], count=1)
-            new = [promoted] + lines[s + 1:chain_end]
+            new = [re.sub(r"^(\s*)elif\b", r"\1if", lines[s], count=1)] + lines[s + 1:chain_end]
         elif len(branches) > 1 and branches[1][0] == "else":
             _, s, e = branches[1]
-            body = lines[s + 1:e]
-            new = _dedent(body, _indent(next(b for b in body if b.strip())) - base)
+            new = _body(lines[s + 1:e], base)
         else:
             new = []
 
@@ -112,7 +152,7 @@ def _rewrite_python(text: str, key: str, enabled: bool) -> str:
             if prev.rstrip().endswith(":") and _indent(nxt) <= _indent(prev):
                 new = [" " * base + "pass"]
         lines[i:chain_end] = new
-        i += max(len(new), 1) if new else 0
+        # re-scan the inserted lines: a kept branch may hold another marker `if`
     return "\n".join(lines)
 
 
@@ -155,15 +195,14 @@ def _reindent_body(body: str, base_ws: str) -> str:
     return "\n".join(base_ws + l[cut:] if l.strip() else "" for l in lines)
 
 
-def _rewrite_clike(text: str, key: str, enabled: bool) -> str:
-    call = call_pattern(key, "bool").pattern
-    head = re.compile(r"if\s*\(?\s*(!\s*)?" + call + r"\s*\)?\s*\{")
+def _rewrite_clike(text: str) -> str:
+    head = re.compile(r"if\s*\(?\s*(" + BOOL + r")\s*\)?\s*\{")
     pos = 0
     while True:
         m = head.search(text, pos)
         if not m:
             return text
-        keep_if = enabled != bool(m.group(1))
+        keep_if = m.group(1) == T
         line_start = text.rfind("\n", 0, m.start()) + 1
         prefix = text[line_start:m.start()]
         own_line = prefix.strip() == ""
@@ -172,88 +211,74 @@ def _rewrite_clike(text: str, key: str, enabled: bool) -> str:
         if_close = _match(text, if_open, "{", "}")
         if_body = text[if_open + 1:if_close]
 
-        # walk else-if / else chain
-        cur = if_close + 1
-        else_body, rest_start = None, None
-        ei = re.compile(r"\s*else\s+if\s*\(")
-        el = re.compile(r"\s*else\s*\{")
-        first_else_if = None
+        cur, else_body, first_else_if = if_close + 1, None, None
         while True:
-            mm = ei.match(text, cur)
+            mm = re.compile(r"\s*else\s+if\s*\(").match(text, cur)
             if mm:
                 first_else_if = first_else_if or mm
                 p_close = _match(text, mm.end() - 1, "(", ")")
-                b_open = text.index("{", p_close)
-                cur = _match(text, b_open, "{", "}") + 1
+                cur = _match(text, text.index("{", p_close), "{", "}") + 1
                 continue
-            mm = el.match(text, cur)
+            mm = re.compile(r"\s*else\s*\{").match(text, cur)
             if mm:
+                b_close = _match(text, mm.end() - 1, "{", "}")
                 if first_else_if is None:
-                    b_close = _match(text, mm.end() - 1, "{", "}")
                     else_body = text[mm.end():b_close]
-                    cur = b_close + 1
-                else:
-                    cur = _match(text, mm.end() - 1, "{", "}") + 1
+                cur = b_close + 1
             break
         chain_end = cur
+        start = line_start if own_line else m.start()
 
         if keep_if:
             repl = _reindent_body(if_body, base_ws)
         elif first_else_if is not None:
-            rest = text[first_else_if.end() - 1:chain_end]  # "(cond) {...} else ..."
-            repl = (base_ws if own_line else "") + "if " + rest.lstrip()
-            # keep original text verbatim for the remaining chain
-            start = line_start if own_line else m.start()
+            repl = base_ws + "if " + text[first_else_if.end() - 1:chain_end].lstrip()
             text = text[:start] + repl + text[chain_end:]
-            pos = start + len(repl)
+            pos = start + len(base_ws)
             continue
         elif else_body is not None:
             repl = _reindent_body(else_body, base_ws)
         else:
             repl = ""
 
-        start = line_start if own_line else m.start()
         end = chain_end
-        if not repl and own_line:
-            # drop the whole statement including its trailing newline
-            if end < len(text) and text[end] == "\n":
-                end += 1
-            text = text[:start] + text[end:]
-            pos = start
-        else:
-            text = text[:start] + repl + text[end:]
-            pos = start + len(repl)
+        if not repl and own_line and end < len(text) and text[end] == "\n":
+            end += 1
+        text = text[:start] + repl + text[end:]
+        pos = start
+
+
+# --------------------------------------------------------------------------- ternaries + cleanup
+
+_ATOM = r"(\"[^\"\n]*\"|'[^'\n]*'|`[^`\n]*`|-?\d+(?:\.\d+)?|[A-Za-z_$][\w$.]*(?:\([^()\n]*\))?)"
+
+
+def _fold_ternaries(text: str, lang: str) -> str:
+    """`⟦T⟧ ? a : b` -> `a`, `x if ⟦F⟧ else y` -> `y` (simple operands only)."""
+    if lang == "py":
+        pat = re.compile(_ATOM + r"\s+if\s+(" + BOOL + r")\s+else\s+" + _ATOM)
+        return pat.sub(lambda m: m.group(1) if m.group(2) == T else m.group(3), text)
+    pat = re.compile(r"(" + BOOL + r")\s*\?\s*" + _ATOM + r"\s*:\s*" + _ATOM)
+    text = pat.sub(lambda m: m.group(2) if m.group(1) == T else m.group(3), text)
+    # `=> ("new")` -> `=> "new"`
+    return re.sub(r"(=>|[^=!<>]=|\breturn)\s*\(\s*" + _ATOM + r"\s*\)(?=\s*[;,\n])", r"\1 \2", text)
+
+
+def _unmark(text: str, lang: str) -> str:
+    t, f = ("True", "False") if lang == "py" else ("true", "false")
+    return VAL.sub(lambda m: m.group(1), text.replace(T, t).replace(F, f))
 
 
 # --------------------------------------------------------------------------- public
 
 
 def rewrite_text(text: str, lang: str, key: str, enabled: bool, value=None) -> str:
-    if lang == "py":
-        text = _rewrite_python(text, key, enabled)
-    else:
-        text = _rewrite_clike(text, key, enabled)
-    text = call_pattern(key, "bool").sub(_literal(value, enabled, "bool", lang), text)
-    text = call_pattern(key, "value").sub(lambda _: _literal(value, enabled, "value", lang), text)
-    return _fold_ternaries(text, lang)
-
-
-_ATOM = r"(\"[^\"\n]*\"|'[^'\n]*'|`[^`\n]*`|-?\d+(?:\.\d+)?|[A-Za-z_$][\w$.]*(?:\([^()\n]*\))?)"
-
-
-def _fold_ternaries(text: str, lang: str) -> str:
-    """`true ? a : b` -> `a`, `X if False else Y` -> `Y` (simple operands only)."""
-    if lang == "py":
-        pat = re.compile(_ATOM + r"\s+if\s+(not\s+)?(True|False)\s+else\s+" + _ATOM)
-        return pat.sub(lambda m: m.group(1) if (m.group(3) == "True") != bool(m.group(2)) else m.group(4), text)
-    pat = re.compile(r"(!\s*)?\b(true|false)\s*\?\s*" + _ATOM + r"\s*:\s*" + _ATOM)
-
-    def sub(m):
-        truthy = (m.group(2) == "true") != bool(m.group(1))
-        return m.group(3) if truthy else m.group(4)
-    text = pat.sub(sub, text)
-    # `=> ("new")` -> `=> "new"`
-    return re.sub(r"(=>|[^=!<>]=|\breturn)\s*\(\s*" + _ATOM + r"\s*\)(?=\s*[;,\n])", r"\1 \2", text)
+    text = call_pattern(key, "bool").sub(T if enabled else F, text)
+    text = call_pattern(key, "value").sub(lambda _: f"⟦v:{_lit(value, lang)}⟧", text)
+    text = _fold(text, lang)
+    text = _rewrite_python(text) if lang == "py" else _rewrite_clike(text)
+    text = _fold_ternaries(text, lang)
+    return _unmark(text, lang)
 
 
 def plan_rewrite(root: Path, key: str, enabled: bool, value=None) -> dict[Path, tuple[str, str]]:

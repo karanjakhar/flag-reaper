@@ -90,6 +90,70 @@ class RewriteJS(unittest.TestCase):
         self.assertEqual(rewrite_text(src, "c", "k", True, "v"), 'const b = "new";\nconst n = "v";\n')
 
 
+class RewriteExperimentValues(unittest.TestCase):
+    """After an A/B test, the flag's value is fixed to the winner; comparisons fold away."""
+
+    def test_js_ternary_on_value(self):
+        src = 'return flagsmith.getValue("p") === "annual_first" ? annualFirst() : monthlyFirst();\n'
+        self.assertEqual(rewrite_text(src, "c", "p", True, "annual_first"), "return annualFirst();\n")
+        self.assertEqual(rewrite_text(src, "c", "p", True, "monthly_first"), "return monthlyFirst();\n")
+
+    def test_js_if_on_value_with_not_equal(self):
+        src = 'if (flagsmith.getValue("p") !== "annual_first") {\n  a();\n} else {\n  b();\n}\n'
+        self.assertEqual(rewrite_text(src, "c", "p", True, "annual_first"), "b();\n")
+
+    def test_python_if_on_value(self):
+        src = 'if flags.get_feature_value("p") == "annual_first":\n    a()\nelse:\n    b()\n'
+        self.assertEqual(rewrite_text(src, "py", "p", True, "annual_first"), "a()\n")
+
+    def test_experiment_flag_value(self):
+        src = 'if (flagsmith.getExperimentFlag("p").value === "annual_first") {\n  a();\n} else {\n  b();\n}\n'
+        self.assertEqual(rewrite_text(src, "c", "p", True, "annual_first"), "a();\n")
+        py = 'flag = 1\nif fs.get_experiment_flag("p", identifier=user.id).value == "x":\n    a()\nelse:\n    b()\n'
+        self.assertEqual(rewrite_text(py, "py", "p", True, "y"), "flag = 1\nb()\n")
+
+    def test_unrelated_literal_if_untouched(self):
+        src = 'if (true) {\n  keep();\n}\nif (flagsmith.hasFeature("k")) {\n  a();\n}\n'
+        self.assertEqual(rewrite_text(src, "c", "k", False), 'if (true) {\n  keep();\n}\n')
+        py = 'if True:\n    keep()\nif flags.is_feature_enabled("k"):\n    a()\n'
+        self.assertEqual(rewrite_text(py, "py", "k", False), 'if True:\n    keep()\n')
+
+    def test_nested_flag_in_kept_branch(self):
+        src = 'if flags.is_feature_enabled("k"):\n    if not flags.is_feature_enabled("k"):\n        x()\n    y()\n'
+        self.assertEqual(rewrite_text(src, "py", "k", True), "y()\n")
+
+
+class Decide(unittest.TestCase):
+    """Winner rule on top of Flagsmith's experiment results payload (shape taken from the live API)."""
+
+    def payload(self, n_c, conv_c, n_v, conv_v, chance):
+        return {"payload": {"metrics": [{
+            "variants": {"control": {"n": n_c, "sum": conv_c}, "annual_first": {"n": n_v, "sum": conv_v}},
+            "inference": {"annual_first": {"lift": 0.95, "chance_to_win": chance}}}]}}
+
+    def test_clear_winner(self):
+        from flagreaper.cli import decide
+        _, winner, _ = decide(self.payload(385, 38, 415, 80, 0.996), 0.95, 50)
+        self.assertEqual(winner, "annual_first")
+
+    def test_control_wins(self):
+        from flagreaper.cli import decide
+        _, winner, _ = decide(self.payload(400, 80, 400, 40, 0.01), 0.95, 50)
+        self.assertEqual(winner, "control")
+
+    def test_no_winner_yet(self):
+        from flagreaper.cli import decide
+        _, winner, why = decide(self.payload(400, 40, 400, 44, 0.7), 0.95, 50)
+        self.assertIsNone(winner)
+        self.assertIn("Keep the experiment running", why)
+
+    def test_too_few_users(self):
+        from flagreaper.cli import decide
+        _, winner, why = decide(self.payload(20, 2, 25, 9, 0.99), 0.95, 50)
+        self.assertIsNone(winner)
+        self.assertIn("not enough users", why)
+
+
 class Classify(unittest.TestCase):
     def test_demo_verdicts(self):
         snap = json.loads(DEMO.read_text())

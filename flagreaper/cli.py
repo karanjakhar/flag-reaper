@@ -200,6 +200,100 @@ def cmd_archive(args):
     return 0
 
 
+def _pct(x, signed=False):
+    if x is None:
+        return "—"
+    return f"{x * 100:+.0f}%" if signed else f"{x * 100:.1f}%"
+
+
+def decide(results: dict, threshold: float, min_users: int):
+    """Pick a winner from Flagsmith's Bayesian results.
+
+    Returns (rows, winner_key | None, explanation). `winner_key` is "control" or a variant key.
+    """
+    metric = (results.get("payload") or {}).get("metrics", [{}])[0]
+    variants = metric.get("variants") or {}
+    inference = metric.get("inference") or {}
+    rows = []
+    for key, v in variants.items():
+        n, conv = int(v.get("n") or 0), float(v.get("sum") or 0)
+        inf = inference.get(key, {})
+        rows.append({"key": key, "n": n, "conv": conv, "rate": conv / n if n else None,
+                     "lift": inf.get("lift"), "chance": inf.get("chance_to_win")})
+    if not rows:
+        return rows, None, "no results yet (no exposures recorded)"
+    challengers = [r for r in rows if r["key"] != "control"]
+    if len(challengers) == 1 and challengers[0]["chance"] is not None:
+        for r in rows:
+            if r["key"] == "control":
+                r["chance"] = 1 - challengers[0]["chance"]
+    small = [r["key"] for r in rows if r["n"] < min_users]
+    if small:
+        return rows, None, f"not enough users yet in {', '.join(small)} (need {min_users} each)"
+    best = max(rows, key=lambda r: r["chance"] or 0)
+    if (best["chance"] or 0) >= threshold:
+        return rows, best["key"], f"{best['key']} wins: {_pct(best['chance'])} chance to be best (threshold {threshold:.0%})"
+    return rows, None, (f"no clear winner yet: best is {best['key']} at {_pct(best['chance'])}, "
+                        f"needs {threshold:.0%}. Keep the experiment running.")
+
+
+def cmd_close(args):
+    """Read an experiment's result, roll the winner out, and set the flag up for code cleanup."""
+    if args.demo:
+        print("close needs a live Flagsmith project (FLAGSMITH_API_TOKEN, FLAGSMITH_PROJECT_ID).")
+        return 2
+    fs = client_for(args)
+    env, exp = fs.find_experiment(args.flag)
+    if not exp:
+        print(f"no experiment found for '{args.flag}'.")
+        return 2
+    exp = fs.experiment(env, exp["id"])
+    feat = exp["feature"]
+    control_value = (exp.get("experiment_rollout") or {}).get("feature_state_value", {}).get("value")
+    options = {o["key"]: o for o in feat.get("multivariate_options") or [] if o.get("key")}
+    metric = (exp.get("metrics") or [{}])[0]
+    better = {"up": "higher is better", "down": "lower is better"}.get(metric.get("direction"), "")
+
+    print(f"{C['b']}{feat['name']}{C['x']} · \"{exp['name']}\" · {env['name']} · {exp['status']}")
+    print(f"{C['d']}Hypothesis:{C['x']} {exp.get('hypothesis', '')}")
+    res = fs.experiment_results(env, exp["id"], refresh=exp["status"] != "completed")
+    as_of = (res.get("as_of") or "")[:16].replace("T", " ")
+    print(f"{C['d']}Metric:{C['x']} {metric.get('metric_name', '?')} ({better}) · results as of {as_of} UTC\n")
+
+    rows, winner, why = decide(res, args.threshold, args.min_users)
+    label = lambda k: f"{control_value} (control)" if k == "control" else k
+    w = max([len(label(r["key"])) for r in rows] + [7])
+    print(f"{'VARIANT'.ljust(w)}  {'USERS':>6} {'CONVERTED':>9} {'RATE':>7} {'LIFT':>6}  CHANCE TO BE BEST")
+    for r in rows:
+        mark = f"  {C['g']}← winner{C['x']}" if r["key"] == winner else ""
+        print(f"{label(r['key']).ljust(w)}  {r['n']:>6} {r['conv']:>9.0f} {_pct(r['rate']):>7} "
+              f"{_pct(r['lift'], True):>6}  {_pct(r['chance']):>8}{mark}")
+    print(f"\n{C['b']}Decision:{C['x']} {why}")
+    if winner is None:
+        return 0
+
+    win_value = control_value if winner == "control" else options[winner]["string_value"] \
+        if options[winner].get("type") == "unicode" else options[winner].get("integer_value")
+    if exp["status"] != "completed":
+        q = f"End the experiment and send 100% of {env['name']} to '{win_value}'?"
+        if not approve(q, args.yes):
+            print("nothing changed; the experiment keeps running.")
+            return 0
+        fs.complete_experiment(env, exp["id"], None if winner == "control" else options[winner]["id"])
+        print(f"{C['g']}ended{C['x']} experiment {exp['id']}, rolled out '{win_value}' in {env['name']}")
+    else:
+        print(f"experiment already ended (rollout: {exp.get('rollout_decision')}).")
+
+    names = ", ".join(e["name"] for e in fs.environments())
+    if not approve(f"Make '{win_value}' the flag's value in every environment ({names})?", args.yes):
+        print("left the other environments as they are.")
+        return 0
+    done = fs.set_value_everywhere(feat["id"], win_value)
+    print(f"{C['g']}{feat['name']} = {json.dumps(win_value)}{C['x']} in {', '.join(done)}")
+    print(f"Next: flagreaper reap {feat['name']}   (removes the losing variant's code and opens a PR)")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="flagreaper", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -225,6 +319,14 @@ def main(argv=None):
             s.add_argument("--dry-run", action="store_true", help="show diff, write nothing")
             s.add_argument("--no-pr", action="store_true", help="edit files only, no git/gh")
         s.set_defaults(fn=fn)
+
+    s = sub.add_parser("close", parents=[common],
+                       help="read an experiment's result, roll out the winner, prepare the flag for cleanup")
+    s.add_argument("flag")
+    s.add_argument("--threshold", type=float, default=0.95, help="chance to be best needed (default 0.95)")
+    s.add_argument("--min-users", type=int, default=50, help="users needed per variant (default 50)")
+    s.add_argument("--yes", action="store_true", help="skip approval prompts (CI only)")
+    s.set_defaults(fn=cmd_close)
 
     args = p.parse_args(argv)
     try:

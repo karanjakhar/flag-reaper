@@ -43,6 +43,12 @@ def color_for(line: str):
         return YELLOW, True
     if "safety stop" in line:
         return RED, True
+    if "← winner" in line or s.startswith(("ended experiment", "pricing_experiment = ", "archived")):
+        return GREEN, True
+    if s.startswith("Decision:"):
+        return FG, True
+    if s.startswith(("VARIANT", "FLAG ")):
+        return DIM, True
     if s.startswith(("PR:", "wrote", "committed", "[demo] archived", "url:")):
         return GREEN, False
     if "stale_on" in line or "stale_off" in line or "orphan" in line:
@@ -109,7 +115,12 @@ def card(title, lines, foot="", title_size=56):
             txt, col, size, bold = ln
         else:
             txt, col, size, bold = ln, FG, 26, False
-        d.text((90, y), txt, font=SANS(size, bold), fill=col)
+        if "\t" in txt:  # two aligned columns
+            left, right = txt.split("\t", 1)
+            d.text((90, y), left, font=SANS(size, True), fill=PURPLE)
+            d.text((250, y), right, font=SANS(size, bold), fill=col)
+        else:
+            d.text((90, y), txt, font=SANS(size, bold), fill=col)
         y += int(size * 1.7)
     if foot:
         d.text((90, H - 70), foot, font=SANS(18), fill=DIM)
@@ -176,9 +187,10 @@ def main():
     out = HERE / "flag-reaper-demo.mp4"
     v = Video(out)
 
-    title = card("Flag Reaper 🪓".replace(" 🪓", ""), [
-        ("Flagsmith flag debt, cleaned up by an agent.", FG, 30, False),
-        ("It finds dead flags, removes their code, opens the PR, archives the flag.", DIM, 24, False),
+    title = card("Flag Reaper", [
+        ("Finish what your A/B test started.", FG, 32, True),
+        ("Reads the Flagsmith Experimentation result, rolls out the winner,", DIM, 24, False),
+        ("deletes the losing code in a PR, and archives the flag.", DIM, 24, False),
         ("A human approves every write.", PURPLE, 28, True),
     ], "Toggle Wars · Flagsmith hackathon · Track 02 AI Agents & Feature Flags · Track 04 Agent Skills", 72)
     black = Image.new("RGB", (W, H), BG)
@@ -186,22 +198,32 @@ def main():
     v.hold(title, 5)
 
     problem = card("The problem", [
-        "Every rollout and every A/B test leaves a flag behind.",
-        "The winner ships to 100%, but the flag check and the losing branch stay in the code.",
-        "Nobody knows which flags are safe to delete, so nobody deletes them.",
-        ("Result: dead code, more paths to test, a Flagsmith dashboard nobody trusts.", RED, 26, False),
+        "An A/B test ends. Someone ships the winner to 100%.",
+        "But the flag check and the losing variant's code stay in the codebase.",
+        "Months later nobody knows which flags are safe to delete, so nobody deletes them.",
+        ("Result: dead code, more paths to test, a flag dashboard nobody trusts.", RED, 26, False),
     ])
     v.fade(title, problem)
     v.hold(problem, 8)
 
-    how = card("How Flagsmith fits", [
-        ("Flagsmith Admin API → every flag, its state in each environment,", FG, 25, False),
-        ("segment & identity overrides, multivariate options, last change", FG, 25, False),
-        ("Code scan → where each flag is called (Python, JS/TS, Go, Java…)", FG, 25, False),
-        ("Verdict: stale_on · stale_off · orphan · active (never touched)", YELLOW, 25, True),
-        ("Code PR first, flag archived in Flagsmith last, only after merge", GREEN, 25, False),
-    ], "This run uses an offline snapshot of the Flagsmith project (--demo). Live mode calls the Admin API, Cloud or self-hosted.")
-    v.fade(problem, how)
+    loop = card("One loop, four steps", [
+        ("1  scan\tread every flag from Flagsmith, find where the code uses it", FG, 24, False),
+        ("2  close\tread the experiment result, end it, roll out the winner", FG, 24, False),
+        ("3  reap\tdelete the losing code, keep the winner, open a pull request", FG, 24, False),
+        ("4  archive\tafter the merge, archive the flag in Flagsmith", FG, 24, False),
+        ("It stops and asks before every change. Flags still in use are refused.", PURPLE, 24, True),
+    ], "Everything in this video is live: Flagsmith Cloud, a real experiment, a real GitHub PR.")
+    v.fade(problem, loop)
+    v.hold(loop, 9)
+
+    how = card("The setup for this demo", [
+        ("Flagsmith project demo-shop: 7 flags, 3 environments", FG, 25, False),
+        ("Experiment: \"Annual vs monthly plan first\", metric: checkout started", FG, 25, False),
+        ("Traffic: 800 simulated users, sent through the official Python SDK", FG, 25, False),
+        ("   (getExperimentFlag for exposure, trackEvent for conversions)", DIM, 22, False),
+        ("Stale threshold set to 0 days so new flags qualify (default: 30)", YELLOW, 25, False),
+    ], "Seed + traffic scripts are in the repo: demo/seed_flagsmith.py, demo/simulate_traffic.py")
+    v.fade(loop, how)
     v.hold(how, 9)
 
     prev = how
@@ -212,8 +234,8 @@ def main():
         ("github.com/karanjakhar/flag-reaper", PURPLE, 30, True),
         ("pip install git+https://github.com/karanjakhar/flag-reaper", FG, 22, False),
         ("Agent Skill included: skill/SKILL.md, compact JSON, approval at every write", FG, 22, False),
-        ("Zero dependencies · 20 tests · MIT · Flagsmith Cloud & self-hosted", DIM, 22, False),
-        ("Demo PR: github.com/karanjakhar/flag-reaper-demo-shop/pull/1", DIM, 22, False),
+        ("Zero dependencies · 30 tests · MIT · Flagsmith Cloud & self-hosted", DIM, 22, False),
+        ("Demo PR: github.com/karanjakhar/flag-reaper-demo-shop/pull/2", DIM, 22, False),
     ], "Built for Toggle Wars, the Flagsmith Experimentation Hackathon", 64)
     v.fade(prev, end, 0.6)
     v.hold(end, 7)
