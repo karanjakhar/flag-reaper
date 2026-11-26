@@ -102,7 +102,7 @@ Without a terminal (CI, a coding agent), every change is refused unless `--yes` 
 
 ## Try it in 30 seconds (no account needed)
 
-Python 3.9+, no dependencies.
+Python 3.10+, no dependencies.
 
 ```bash
 git clone https://github.com/karanjakhar/flag-reaper && cd flag-reaper
