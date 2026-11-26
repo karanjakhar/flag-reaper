@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flagreaper"
+version = "0.1.0"
+description = "Find stale Flagsmith feature flags, remove the dead code, open the PR, archive the flag - with a human approving every step."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+flagreaper = "flagreaper.cli:main"
