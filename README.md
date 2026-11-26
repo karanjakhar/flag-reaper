@@ -8,7 +8,7 @@ Built for **Toggle Wars, the Flagsmith Experimentation Hackathon**. Track 02 (AI
 
 | | |
 |---|---|
-| 🎬 **Demo video** (2 min, everything live) | [`demo/flag-reaper-demo.mp4`](demo/flag-reaper-demo.mp4) |
+| 🎬 **Demo video** (3 min, narrated, everything live) | [`demo/flag-reaper-demo.mp4`](demo/flag-reaper-demo.mp4) |
 | 🔀 **Pull request opened by the tool** | [flag-reaper-demo-shop#2](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/2) |
 | 🤖 **Agent Skill** | [`skills/flagsmith-flag-reaper/SKILL.md`](skills/flagsmith-flag-reaper/SKILL.md) |
 
@@ -170,8 +170,10 @@ python3 demo/seed_flagsmith.py                 # 3 environments, 7 flags, a segm
 .venv/bin/python demo/simulate_traffic.py --flag pricing_experiment --event checkout_started \
     --users 800 --rate monthly_first=0.10 --rate annual_first=0.16
 python3 demo/record.py ../flag-reaper-demo-shop   # runs the real commands, answers the prompts
-python3 demo/render.py                          # transcript -> demo/flag-reaper-demo.mp4
+python3 demo/render.py                          # transcript + narration -> demo/flag-reaper-demo.mp4
 ```
+
+The voiceover is generated offline with [Piper](https://github.com/OHF-Voice/piper1-gpl) (voice `en_US-ryan-high`) from [`demo/narration.json`](demo/narration.json). Each scene stretches to fit its line. Setup: `.venv/bin/pip install piper-tts` and `.venv/bin/python -m piper.download_voices en_US-ryan-high` in `~/.cache/piper-voices`. Set `NO_VOICE=1` for a silent render.
 
 ## Development
 

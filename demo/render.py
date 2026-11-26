@@ -2,14 +2,32 @@
 
 usage: python3 demo/render.py
 """
+import hashlib
 import json
+import os
 import subprocess
+import wave
 import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+VOICE = Path(os.environ.get("PIPER_VOICE", Path.home() / ".cache/piper-voices/en_US-ryan-high.onnx"))
+VOICE_CACHE = HERE / ".voice-cache"
+RATE = 22050
+
+
+def tts(text: str):
+    """Synthesize `text` with Piper (offline). Returns (wav_path, seconds); cached by content."""
+    VOICE_CACHE.mkdir(exist_ok=True)
+    out = VOICE_CACHE / (hashlib.sha1((VOICE.name + text).encode()).hexdigest()[:16] + ".wav")
+    if not out.exists():
+        subprocess.run([str(ROOT / ".venv/bin/python"), "-m", "piper", "-m", str(VOICE), "-f", str(out),
+                        "--sentence-silence", "0.25"], input=text, text=True, check=True, capture_output=True)
+    with wave.open(str(out)) as w:
+        return out, w.getnframes() / w.getframerate()
 W, H, FPS = 1280, 720, 30
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 MONO = ImageFont.truetype(FONT_DIR + "DejaVuSansMono.ttf", 15)
@@ -134,6 +152,17 @@ class Video:
              "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
              "-movflags", "+faststart", str(path)], stdin=subprocess.PIPE)
         self.frames = 0
+        self.cues = []  # (start_seconds, wav_path)
+
+    def say(self, text: str, delay: float = 0.3) -> float:
+        """Queue narration starting `delay` s from now; returns the time it ends (seconds)."""
+        wav, dur = tts(text)
+        start = self.frames / FPS + delay
+        self.cues.append((start, wav))
+        return start + dur
+
+    def hold_until(self, img, t_end: float, at_least: float):
+        self.hold(img, max(at_least, t_end - self.frames / FPS))
 
     def hold(self, img, seconds):
         b = img.tobytes()
@@ -153,12 +182,13 @@ class Video:
         self.p.wait()
 
 
-def play_step(v, step, idx, total, prev_img):
+def play_step(v, step, idx, total, prev_img, line=None):
     caption, cmd, out = step["caption"], step["cmd"], step["out"]
     label = f"step {idx}/{total}"
     lines = ["$ "]
     first = frame_term(lines, caption, True, label)
     v.fade(prev_img, first)
+    t_end = v.say(line) if line else 0
     v.hold(first, 1.0)
     # type the command
     for i in range(1, len(cmd) + 1):
@@ -178,12 +208,38 @@ def play_step(v, step, idx, total, prev_img):
         lines.append(ln)
         v.hold(frame_term(lines, caption, False, label), 0.07)
     end = frame_term(lines, caption, False, label)
-    v.hold(end, 3.0 + min(len(out_lines), ROWS) * 0.12)
+    v.hold_until(end, t_end + 0.8, 3.0 + min(len(out_lines), ROWS) * 0.12)
     return end
+
+
+def mux_audio(v, video_path: Path):
+    """Lay every narration clip on a silent track at its cue time, then mux into the MP4."""
+    import array
+    total = int(v.frames / FPS * RATE) + RATE
+    track = array.array("h", bytes(2 * total))
+    for start, wav in v.cues:
+        with wave.open(str(wav)) as w:
+            assert w.getframerate() == RATE and w.getsampwidth() == 2 and w.getnchannels() == 1
+            clip = array.array("h", w.readframes(w.getnframes()))
+        i = int(start * RATE)
+        track[i:i + len(clip)] = clip[: max(0, total - i)]
+    audio = VOICE_CACHE / "narration-track.wav"
+    with wave.open(str(audio), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(track.tobytes())
+    tmp = video_path.with_suffix(".tmp.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(video_path), "-i", str(audio),
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-af", "loudnorm=I=-16:TP=-1.5",
+                    "-shortest", "-movflags", "+faststart", str(tmp)], check=True)
+    tmp.replace(video_path)
 
 
 def main():
     steps = json.loads((HERE / "transcript.json").read_text())
+    narr = json.loads((HERE / "narration.json").read_text()) if not os.environ.get("NO_VOICE") else None
+    say = (lambda key: v.say(narr[key])) if narr else (lambda key: 0)
     out = HERE / "flag-reaper-demo.mp4"
     v = Video(out)
 
@@ -195,7 +251,7 @@ def main():
     ], "Toggle Wars · Flagsmith hackathon · Track 02 AI Agents & Feature Flags · Track 04 Agent Skills", 72)
     black = Image.new("RGB", (W, H), BG)
     v.fade(black, title, 0.6)
-    v.hold(title, 5)
+    v.hold_until(title, say("title") + 0.8, 5)
 
     problem = card("The problem", [
         "An A/B test ends. Someone ships the winner to 100%.",
@@ -204,7 +260,7 @@ def main():
         ("Result: dead code, more paths to test, a flag dashboard nobody trusts.", RED, 26, False),
     ])
     v.fade(title, problem)
-    v.hold(problem, 8)
+    v.hold_until(problem, say("problem") + 0.8, 8)
 
     loop = card("One loop, four steps", [
         ("1  scan\tread every flag from Flagsmith, find where the code uses it", FG, 24, False),
@@ -214,7 +270,7 @@ def main():
         ("It stops and asks before every change. Flags still in use are refused.", PURPLE, 24, True),
     ], "Everything in this video is live: Flagsmith Cloud, a real experiment, a real GitHub PR.")
     v.fade(problem, loop)
-    v.hold(loop, 9)
+    v.hold_until(loop, say("loop") + 0.8, 9)
 
     how = card("The setup for this demo", [
         ("Flagsmith project demo-shop: 7 flags, 3 environments", FG, 25, False),
@@ -224,11 +280,11 @@ def main():
         ("Stale threshold set to 0 days so new flags qualify (default: 30)", YELLOW, 25, False),
     ], "Seed + traffic scripts are in the repo: demo/seed_flagsmith.py, demo/simulate_traffic.py")
     v.fade(loop, how)
-    v.hold(how, 9)
+    v.hold_until(how, say("setup") + 0.8, 9)
 
     prev = how
     for i, s in enumerate(steps, 1):
-        prev = play_step(v, s, i, len(steps), prev)
+        prev = play_step(v, s, i, len(steps), prev, narr["steps"][i - 1] if narr else None)
 
     end = card("Flag Reaper", [
         ("github.com/karanjakhar/flag-reaper", PURPLE, 30, True),
@@ -238,8 +294,10 @@ def main():
         ("Demo PR: github.com/karanjakhar/flag-reaper-demo-shop/pull/2", DIM, 22, False),
     ], "Built for Toggle Wars, the Flagsmith Experimentation Hackathon", 64)
     v.fade(prev, end, 0.6)
-    v.hold(end, 7)
+    v.hold_until(end, say("end") + 1.5, 7)
     v.close()
+    if narr:
+        mux_audio(v, out)
     print(f"{out}  {v.frames / FPS:.1f}s")
 
 

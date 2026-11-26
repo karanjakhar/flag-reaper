@@ -6,3 +6,4 @@ dist/
 .venv/
 *.archived.log
 .env
+demo/.voice-cache/
