@@ -1,0 +1,42 @@
+[
+ {
+  "caption": "1 \u00b7 Scan: read every flag from Flagsmith, grep the code, give each flag a verdict",
+  "cmd": "flagreaper scan",
+  "out": "flagreaper project=demo-shop envs=Development,Staging,Production stale>=30d\n\nFLAG                VERDICT    REFS  REASON\nmax_upload_mb       stale_on      2  ON in all 3 envs, unchanged 209d\nnew_checkout        stale_on      3  ON in all 3 envs, unchanged 284d\nlegacy_banner       stale_off     3  OFF in all 3 envs, unchanged 269d\nold_onboarding_v1   orphan        0  no references in code\nbeta_search         active        1  2 segment/identity override(s)\ndark_mode           active        1  differs across environments\npricing_experiment  active        1  multivariate / experiment\n\n4 of 7 flags are debt. Next: flagreaper reap <flag>"
+ },
+ {
+  "caption": "Agents get the same answer as compact JSON: one line per debt flag, few tokens",
+  "cmd": "flagreaper scan --json --only stale_on,stale_off,orphan",
+  "out": "[{\"flag\":\"max_upload_mb\",\"v\":\"stale_on\",\"why\":\"ON in all 3 envs, unchanged 209d\",\"refs\":2},{\"flag\":\"new_checkout\",\"v\":\"stale_on\",\"why\":\"ON in all 3 envs, unchanged 284d\",\"refs\":3},{\"flag\":\"legacy_banner\",\"v\":\"stale_off\",\"why\":\"OFF in all 3 envs, unchanged 269d\",\"refs\":3},{\"flag\":\"old_onboarding_v1\",\"v\":\"orphan\",\"why\":\"no references in code\",\"refs\":0}]"
+ },
+ {
+  "caption": "Guardrail: a flag that still does work (different per environment) is refused",
+  "cmd": "flagreaper reap dark_mode",
+  "out": "dark_mode: active \u2014 differs across environments\nsafety stop: flag still does work. Not touching code or Flagsmith."
+ },
+ {
+  "caption": "2 \u00b7 Reap: keep the live ON branch, delete the dead one. It asks before writing, again before the PR",
+  "cmd": "flagreaper reap new_checkout",
+  "out": "new_checkout: stale_on \u2014 ON in all 3 envs, unchanged 284d\n\nKeeping the ON path. 2 file(s):\n\n--- a/api/orders.py\n+++ b/api/orders.py\n@@ -6,11 +6,8 @@\n def place_order(user, cart):\n     flags = flagsmith.get_identity_flags(user.id)\n \n-    if flags.is_feature_enabled(\"new_checkout\"):\n-        order = fast_path_order(cart)\n-        audit(\"fast path\")\n-    else:\n-        order = legacy_order(cart)\n+    order = fast_path_order(cart)\n+    audit(\"fast path\")\n \n     if flags.is_feature_enabled(\"legacy_banner\"):\n         notify(user, \"We moved!\")\n--- a/src/checkout.js\n+++ b/src/checkout.js\n@@ -3,12 +3,8 @@\n export function renderCheckout(cart) {\n   const total = cart.items.reduce((sum, i) => sum + i.price, 0);\n \n-  if (flagsmith.hasFeature(\"new_checkout\")) {\n-    // one-page checkout, shipped to 100% in February\n-    return onePageCheckout(cart, total);\n-  } else {\n-    return legacyThreeStepCheckout(cart, total);\n-  }\n+  // one-page checkout, shipped to 100% in February\n+  return onePageCheckout(cart, total);\n }\n \n export function header(user) {\n@@ -26,4 +22,4 @@\n   return flagsmith.getValue(\"max_upload_mb\");\n }\n \n-export const showBadge = () => (flagsmith.hasFeature(\"new_checkout\") ? \"new\" : \"\");\n+export const showBadge = () => \"new\";\n\n? Apply this change to 2 file(s)? [y/N] y\nwrote 2 file(s)\ncommitted on flagreaper/remove-new_checkout\n? Push 'flagreaper/remove-new_checkout' and open a pull request? [y/N] y\nPR: https://github.com/karanjakhar/flag-reaper-demo-shop/pull/1"
+ },
+ {
+  "caption": "The pull request is real, on GitHub, with the evidence from Flagsmith in the body",
+  "cmd": "gh pr view 1",
+  "out": "title:   Remove stale flag new_checkout\nauthor:  karanjakhar\nbranch:  flagreaper/remove-new_checkout\nurl:     https://github.com/karanjakhar/flag-reaper-demo-shop/pull/1\n--\n## Remove stale flag `new_checkout`\n\n**Evidence from Flagsmith:** ON in all 3 envs, unchanged 284d.\n\n**Change:** kept the ON branch, deleted the dead one in 2 file(s):\n- `api/orders.py`\n- `src/checkout.js`\n\n**After merge + deploy:** `flagreaper archive new_checkout` (verifies no references remain, asks before archiving).\n\n_Opened by flagreaper \u2014 a human approved this diff._"
+ },
+ {
+  "caption": "Guardrail: archiving is refused while main still calls the flag",
+  "cmd": "flagreaper archive new_checkout",
+  "out": "safety stop: 'new_checkout' still referenced at:\n   api/orders.py:9\n   src/checkout.js:6\n   src/checkout.js:29\nMerge the cleanup PR (and check out that code) first."
+ },
+ {
+  "caption": "3 \u00b7 After the PR is merged: no references left, so it asks, then archives the flag",
+  "cmd": "git pull && flagreaper archive new_checkout",
+  "out": "? Archive 'new_checkout' in Flagsmith? (no code references remain) [y/N] y\n[demo] archived 'new_checkout' (logged to flagsmith-snapshot.archived.log)"
+ },
+ {
+  "caption": "Orphan flags (in Flagsmith, not in code) skip the code step and go straight to archive",
+  "cmd": "flagreaper reap old_onboarding_v1",
+  "out": "old_onboarding_v1: orphan \u2014 no references in code\nNo code references. Only the Flagsmith flag needs archiving.\n? Archive 'old_onboarding_v1' in Flagsmith? [y/N] y\n[demo] archived 'old_onboarding_v1' (logged to flagsmith-snapshot.archived.log)"
+ }
+]

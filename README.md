@@ -4,6 +4,8 @@
 
 Built for **Toggle Wars, the Flagsmith Experimentation Hackathon**. Track 02 (AI Agents and Feature Flags), also packaged as a Track 04 Agent Skill ([`skill/SKILL.md`](skill/SKILL.md)).
 
+**Demo video (1:40):** [`demo/flag-reaper-demo.mp4`](demo/flag-reaper-demo.mp4) · **Real PR opened by the tool:** [flag-reaper-demo-shop#1](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/1)
+
 ## The problem
 
 Every experiment and rollout leaves a flag behind. Once the winner ships to 100%, the flag check and the losing branch stay in the code. Nobody knows which flags are safe to delete, so nobody deletes them. The result is dead code paths, more combinations to test, and dashboards full of flags nobody trusts.
@@ -78,6 +80,7 @@ pip install git+https://github.com/karanjakhar/flag-reaper
 export FLAGSMITH_API_TOKEN=<organisation API key>   # Organisation settings → API Keys
 export FLAGSMITH_PROJECT_ID=<id>                    # from the project URL
 # self-hosted: export FLAGSMITH_API_URL=https://flags.example.com/api/v1
+# or put these lines in a .env file (cwd, --repo dir, or ~/.config/flagreaper/.env)
 
 cd your-app
 flagreaper scan
@@ -121,6 +124,13 @@ SDK calls recognised: `hasFeature`, `isFeatureEnabled`, `is_feature_enabled`, `I
 - Code changes ship first, the flag is archived last. Archiving a flag that is still evaluated would flip users to the default.
 - Archive is reversible in Flagsmith (unarchive); nothing is deleted.
 - Known gap: Edge identity overrides are not visible through the endpoints used; check them for flags used with per-user targeting.
+
+## Re-making the demo video
+
+```bash
+python3 demo/record.py <demo-app-git-repo>   # runs real commands in a pty, answers prompts, opens a real PR
+python3 demo/render.py                       # transcript.json -> demo/flag-reaper-demo.mp4 (Pillow + ffmpeg)
+```
 
 ## Development
 

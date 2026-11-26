@@ -24,9 +24,26 @@ if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
 BADGE = {"stale_on": "g", "stale_off": "y", "orphan": "r", "active": "d"}
 
 
+def load_dotenv(*dirs: Path) -> None:
+    """Load KEY=VALUE lines from .env files (cwd, repo, flagreaper home); never overrides real env vars."""
+    seen = set()
+    for d in dirs:
+        f = (d / ".env").resolve()
+        if f in seen or not f.is_file():
+            continue
+        seen.add(f)
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.removeprefix("export ").split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
 def client_for(args):
     if args.demo:
         return DemoClient(args.demo)
+    load_dotenv(Path.cwd(), Path(args.repo), Path.home() / ".config" / "flagreaper")
     return FlagsmithClient.from_env()
 
 
