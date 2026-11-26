@@ -233,7 +233,7 @@ def main():
     end = card("Flag Reaper", [
         ("github.com/karanjakhar/flag-reaper", PURPLE, 30, True),
         ("pip install git+https://github.com/karanjakhar/flag-reaper", FG, 22, False),
-        ("Agent Skill included: skill/SKILL.md, compact JSON, approval at every write", FG, 22, False),
+        ("Agent Skill included: skills/flagsmith-flag-reaper/SKILL.md, compact JSON, approval at every write", FG, 22, False),
         ("Zero dependencies · 30 tests · MIT · Flagsmith Cloud & self-hosted", DIM, 22, False),
         ("Demo PR: github.com/karanjakhar/flag-reaper-demo-shop/pull/2", DIM, 22, False),
     ], "Built for Toggle Wars, the Flagsmith Experimentation Hackathon", 64)

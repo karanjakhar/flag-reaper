@@ -10,7 +10,7 @@ Built for **Toggle Wars, the Flagsmith Experimentation Hackathon**. Track 02 (AI
 |---|---|
 | 🎬 **Demo video** (2 min, everything live) | [`demo/flag-reaper-demo.mp4`](demo/flag-reaper-demo.mp4) |
 | 🔀 **Pull request opened by the tool** | [flag-reaper-demo-shop#2](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/2) |
-| 🤖 **Agent Skill** | [`skill/SKILL.md`](skill/SKILL.md) |
+| 🤖 **Agent Skill** | [`skills/flagsmith-flag-reaper/SKILL.md`](skills/flagsmith-flag-reaper/SKILL.md) |
 
 ---
 
@@ -133,7 +133,7 @@ Works with Flagsmith Cloud and self-hosted, and with v1 and v2 feature versionin
 
 ## Use it from a coding agent
 
-Copy [`skill/SKILL.md`](skill/SKILL.md) to your agent's skills folder (for Claude Code: `.claude/skills/flagsmith-flag-reaper/SKILL.md`), then ask: *"close the pricing experiment and clean up the flag"*, or *"clean up our stale flags"*.
+Copy [`skills/flagsmith-flag-reaper/SKILL.md`](skills/flagsmith-flag-reaper/SKILL.md) to your agent's skills folder (for Claude Code: `.claude/skills/flagsmith-flag-reaper/SKILL.md`), then ask: *"close the pricing experiment and clean up the flag"*, or *"clean up our stale flags"*.
 
 The agent runs `flagreaper scan --json`, which returns one short line per flag so it costs few tokens. It shows you each diff and result, and only passes `--yes` for a step after you approve it in chat.
 
