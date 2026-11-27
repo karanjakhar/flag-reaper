@@ -161,7 +161,7 @@ Only expressions that come from the flag being removed are ever folded. An unrel
 - Code changes ship first and the flag is archived last. Archiving a flag that's still evaluated would flip users to the default.
 - Edge identity overrides aren't visible through the endpoints used. Check those flags yourself if you target individual users.
 - Ending an experiment and setting its result use endpoints from Flagsmith's coding-agent guide, plus `experiments/<id>/complete/` (found by testing on throwaway flags, not yet in the public docs).
-- The demo experiment uses simulated traffic (800 users through the official Python SDK), which the hackathon allows.
+- The demo experiment uses simulated traffic (800 users through the official Python SDK), which the hackathon allows. Each simulated user converts with a set probability: 10% for `monthly_first`, 16% for `annual_first`. The observed rates (9.9% and 19.3%) differ from those because it's a random sample of a few hundred users per variant. The random seed is fixed (`--seed 7`), so the same command produces the same rolls.
 
 ## Reproduce the demo
 
