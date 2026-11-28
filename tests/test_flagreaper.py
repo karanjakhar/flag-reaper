@@ -123,6 +123,50 @@ class RewriteExperimentValues(unittest.TestCase):
         self.assertEqual(rewrite_text(src, "py", "k", True), "y()\n")
 
 
+class RewriteUnreachable(unittest.TestCase):
+    """A kept branch that always returns makes the code after the `if` unreachable: drop it."""
+
+    def test_python_early_return_drops_fallthrough(self):
+        # the exact shape from examples/demo-app/api/orders.py (found by a recorded agent run)
+        src = ('def receipts(user):\n    flags = get(user)\n'
+               '    if not flags.is_feature_enabled("k"):\n        return modern(user)\n    return old(user)\n'
+               '\n\ndef other():\n    pass\n')
+        out = rewrite_text(src, "py", "k", False)
+        self.assertEqual(out, 'def receipts(user):\n    flags = get(user)\n    return modern(user)\n'
+                              '\n\ndef other():\n    pass\n')
+        self.assertTrue(compiles(out), out)
+
+    def test_python_fallthrough_kept_when_branch_does_not_exit(self):
+        src = 'def f(flags):\n    if flags.is_feature_enabled("k"):\n        a()\n    return b()\n'
+        self.assertEqual(rewrite_text(src, "py", "k", True), "def f(flags):\n    a()\n    return b()\n")
+
+    def test_python_only_same_block_dropped(self):
+        src = ('def f(flags):\n    for x in xs:\n        if flags.is_feature_enabled("k"):\n            continue\n'
+               '        use(x)\n    done()\n')
+        self.assertEqual(rewrite_text(src, "py", "k", True), "def f(flags):\n    for x in xs:\n        continue\n    done()\n")
+
+    def test_python_nested_return_is_not_an_exit(self):
+        src = ('def f(flags):\n    if flags.is_feature_enabled("k"):\n        if y:\n            return 1\n'
+               '    return 2\n')
+        self.assertEqual(rewrite_text(src, "py", "k", True), "def f(flags):\n    if y:\n        return 1\n    return 2\n")
+
+    def test_js_early_return_drops_fallthrough(self):
+        src = ('function f() {\n  if (flagsmith.hasFeature("k")) {\n    return a();\n  }\n  b();\n  return c();\n}\n'
+               'g();\n')
+        self.assertEqual(rewrite_text(src, "c", "k", True), "function f() {\n  return a();\n}\ng();\n")
+
+    def test_js_fallthrough_kept_when_branch_does_not_exit(self):
+        src = 'function f() {\n  if (flagsmith.hasFeature("k")) {\n    a();\n  }\n  return c();\n}\n'
+        self.assertEqual(rewrite_text(src, "c", "k", True), "function f() {\n  a();\n  return c();\n}\n")
+
+    def test_js_switch_cases_never_dropped(self):
+        src = ('switch (x) {\n  case 1:\n    if (flagsmith.hasFeature("k")) {\n      break;\n    }\n    a();\n'
+               '  case 2:\n    b();\n}\n')
+        out = rewrite_text(src, "c", "k", True)
+        self.assertIn("case 2:", out)
+        self.assertIn("a();", out)
+
+
 class Decide(unittest.TestCase):
     """Winner rule on top of Flagsmith's experiment results payload (shape taken from the live API)."""
 

@@ -103,6 +103,27 @@ def _body(lines: list[str], base: int) -> list[str]:
     return _dedent(lines, _indent(first) - base) if first is not None else []
 
 
+_PY_EXIT = re.compile(r"(return|raise|continue|break)\b")
+
+
+def _py_exits(block: list[str], base: int) -> bool:
+    """True if the last statement at indent `base` in `block` always leaves the block."""
+    top = [ln for ln in block if ln.strip() and _indent(ln) == base]
+    return bool(top) and bool(_PY_EXIT.match(top[-1].lstrip()))
+
+
+def _py_dead_end(lines: list[str], start: int, base: int) -> int:
+    """Index after the statements from `start` on that sit in the same block (indent >= base)."""
+    end, j = start, start
+    while j < len(lines):
+        if lines[j].strip():
+            if _indent(lines[j]) < base:
+                break
+            end = j + 1
+        j += 1
+    return end
+
+
 def _rewrite_python(text: str) -> str:
     head = re.compile(r"^(\s*)if\s+(" + BOOL + r")\s*:\s*(#.*)?$")
     lines = text.split("\n")
@@ -151,6 +172,10 @@ def _rewrite_python(text: str) -> str:
             nxt = next((lines[k] for k in range(chain_end, len(lines)) if lines[k].strip()), "")
             if prev.rstrip().endswith(":") and _indent(nxt) <= _indent(prev):
                 new = [" " * base + "pass"]
+        elif base > 0 and _py_exits(new, base):
+            # the kept branch always returns/raises, so what followed the `if` in this block
+            # can no longer run: `if not flag: return a` + `return b` -> `return a`
+            chain_end = _py_dead_end(lines, chain_end, base)
         lines[i:chain_end] = new
         # re-scan the inserted lines: a kept branch may hold another marker `if`
     return "\n".join(lines)
@@ -193,6 +218,53 @@ def _reindent_body(body: str, base_ws: str) -> str:
         return ""
     cut = min(_indent(l) for l in lines if l.strip())
     return "\n".join(base_ws + l[cut:] if l.strip() else "" for l in lines)
+
+
+_C_EXIT = re.compile(r"(return|throw|break|continue)\b[^{};]*;?\s*(//.*)?$")
+
+
+def _enclosing_close(text: str, pos: int) -> int | None:
+    """Index of the `}` that closes the block containing `pos`, or None (skips strings/comments)."""
+    depth, i, n = 0, pos, len(text)
+    while i < n:
+        c = text[i]
+        if c in "\"'`":
+            q, i = c, i + 1
+            while i < n and text[i] != q:
+                i += 2 if text[i] == "\\" else 1
+        elif text.startswith("//", i):
+            i = text.find("\n", i)
+            i = n if i < 0 else i
+            continue
+        elif text.startswith("/*", i):
+            i = text.find("*/", i)
+            i = n if i < 0 else i + 1
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+        i += 1
+    return None
+
+
+def _drop_dead_clike(text: str, after: int, repl: str, base_ws: str) -> str:
+    """If `repl` (just inserted, ending at `after`) ends in return/throw/break/continue at its own
+    top level, remove the statements that follow it in the same block: they can't run any more."""
+    top = [l for l in repl.split("\n") if l.strip() and _indent(l) == len(base_ws)]
+    if not top or not _C_EXIT.match(top[-1].strip()):
+        return text
+    close = _enclosing_close(text, after)
+    if close is None:
+        return text
+    dead = text[after:close]
+    if not dead.strip() or re.search(r"\bcase\b|\bdefault\s*:", dead):
+        return text  # nothing to drop, or a switch: fall-through labels are still reachable
+    nl = text.rfind("\n", after, close)
+    if nl >= 0 and not text[nl + 1:close].strip():
+        return text[:after] + text[nl:]  # keep the closing brace's own line and indent
+    return text[:after] + " " + text[close:]
 
 
 def _rewrite_clike(text: str) -> str:
@@ -245,6 +317,8 @@ def _rewrite_clike(text: str) -> str:
         if not repl and own_line and end < len(text) and text[end] == "\n":
             end += 1
         text = text[:start] + repl + text[end:]
+        if repl and own_line:
+            text = _drop_dead_clike(text, start + len(repl), repl, base_ws)
         pos = start
 
 

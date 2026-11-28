@@ -141,6 +141,8 @@ The agent runs `flagreaper scan --json`, which returns one short line per flag, 
 
 It shows you each result and diff, and passes `--yes` for a step only after you approve it in chat.
 
+**A recorded run:** [`demo/flag-reaper-agent.mp4`](demo/flag-reaper-agent.mp4) (62 s) shows Claude Code (Claude Sonnet 5.5) using the skill on the live demo project in three chat turns, ending in [PR #3](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/3). The full transcript, with the token usage for each turn, is in [`demo/agent-run.json`](demo/agent-run.json). Total: 358,869 tokens, of which 343,789 are cache reads of Claude Code's own prompt and 2,149 are output.
+
 For CI there's a weekly flag-debt report: [`examples/flag-debt-report.yml`](examples/flag-debt-report.yml).
 
 ## How Flagsmith is used
@@ -212,7 +214,7 @@ Every image in this README is rendered from [`demo/transcript.json`](demo/transc
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v   # 30 tests, including end-to-end runs on the demo app
+python3 -m unittest discover -s tests -v   # 37 tests, including end-to-end runs on the demo app
 ```
 
 | File | Job |

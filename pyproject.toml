@@ -13,3 +13,6 @@ dependencies = []
 
 [project.scripts]
 flagreaper = "flagreaper.cli:main"
+
+[tool.setuptools]
+packages = ["flagreaper"]
