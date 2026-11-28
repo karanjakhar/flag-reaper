@@ -9,7 +9,7 @@ Flag Reaper reads your Flagsmith Experimentation result, rolls out the winner, d
 </p>
 
 <p align="center">
-  <a href="demo/flag-reaper-demo.mp4"><b>▶ 3-minute demo video</b></a> (narrated, everything live) ·
+  <a href="demo/flag-reaper-demo.mp4"><b>▶ Demo video</b></a> (2½ min, narrated, CLI + coding agent, everything live) ·
   <a href="https://github.com/karanjakhar/flag-reaper-demo-shop/pull/2"><b>The PR it opened</b></a> ·
   <a href="skills/flagsmith-flag-reaper/SKILL.md"><b>Agent Skill</b></a> ·
   <a href="#try-it-in-30-seconds">Try it in 30 seconds</a>
@@ -141,7 +141,7 @@ The agent runs `flagreaper scan --json`, which returns one short line per flag, 
 
 It shows you each result and diff, and passes `--yes` for a step only after you approve it in chat.
 
-**A recorded run:** [`demo/flag-reaper-agent.mp4`](demo/flag-reaper-agent.mp4) (62 s) shows Claude Code (Claude Sonnet 5.5) using the skill on the live demo project in three chat turns, ending in [PR #3](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/3). The full transcript, with the token usage for each turn, is in [`demo/agent-run.json`](demo/agent-run.json). Total: 358,869 tokens, of which 343,789 are cache reads of Claude Code's own prompt and 2,149 are output.
+**A recorded run:** the last part of the [demo video](demo/flag-reaper-demo.mp4) shows Claude Code (Claude Sonnet 5.5) using the skill on the live demo project in three chat turns, ending in [PR #3](https://github.com/karanjakhar/flag-reaper-demo-shop/pull/3). The full transcript, with the token usage for each turn, is in [`demo/agent-run.json`](demo/agent-run.json). Total: 358,869 tokens, of which 343,789 are cache reads of Claude Code's own prompt and 2,149 are output.
 
 For CI there's a weekly flag-debt report: [`examples/flag-debt-report.yml`](examples/flag-debt-report.yml).
 

@@ -1,18 +1,22 @@
 {
- "title": "This is Flag Reaper. It finishes what your A B test started. It reads the Flagsmith experiment result, rolls out the winner, deletes the losing code in a pull request, and archives the flag. And it asks you before every change.",
- "problem": "Here's the problem. An A B test ends, someone ships the winner to a hundred percent, and everyone moves on. But the flag check, and the losing variant, stay in the code. A year later, nobody knows which flags are safe to delete. So nobody deletes them.",
- "loop": "Flag Reaper turns that into one loop, with four steps: scan, close, reap, and archive. It stops and asks before every change, and it refuses to touch any flag that is still doing work.",
- "setup": "Everything you'll see is live. A Flagsmith Cloud project with seven flags in three environments, and a real experiment: annual versus monthly plan first. Eight hundred simulated users went through the official Python SDK. For this demo, the stale threshold is zero days, instead of thirty.",
+ "title": "This is Flag Reaper. It finishes what your A B test started: it rolls out the winner, deletes the losing code in a pull request, and archives the flag. It asks you before every change.",
+ "problem": "An A B test ends, the winner ships, and everyone moves on. But the flag check and the losing code stay. A year later nobody knows which flags are safe to delete, so nobody does.",
+ "loop": "Flag Reaper turns that into one loop: scan, close, reap, and archive. Flags that still do work are refused.",
+ "setup": "Everything here is live: Flagsmith Cloud, seven flags, and a real experiment with eight hundred simulated users. The stale threshold is zero days for the demo.",
  "steps": [
-  "First, scan. Flag Reaper reads every flag from Flagsmith, finds where the code uses it, and gives each flag a verdict. Four flags are debt. The pricing experiment is still running, so it's marked active, and left alone.",
-  "Now we close the experiment. Flagsmith's Bayesian engine says annual first converts at nineteen percent, against ten, with a ninety nine point six percent chance to be best. That passes the ninety five percent rule. I approve ending the experiment, and then approve setting the winner in every environment.",
-  "Scan again. The same flag no longer splits traffic, and it has one value everywhere. So now, it's debt.",
-  "Reap. Flag Reaper rewrites the code. The experiment check and the losing branch are gone, and the winning branch stays. I approve the diff. It commits to a new branch, and after a second approval, it opens the pull request.",
-  "Here's that pull request on GitHub, with the evidence from Flagsmith in the description, so the reviewer knows why it's safe.",
-  "Now the guardrails. Beta search has a segment override, so it's still doing work. Flag Reaper refuses to touch it.",
+  "Scan. Every flag gets a verdict from Flagsmith and the code. Four are debt. The running experiment is active, so it's left alone.",
+  "Close the experiment. Flagsmith's Bayesian engine gives annual first a ninety nine point six percent chance to be best. That passes the rule. I approve ending it, and setting the winner everywhere.",
+  "Reap. Flag Reaper rewrites the code: the experiment check and the losing branch are gone, and the winner stays. I approve the diff. It commits to a new branch, and after a second approval, it opens the pull request.",
+  "The pull request carries the evidence from Flagsmith, so the reviewer knows why it's safe to merge.",
+  "Now the guardrails. Beta search still has a segment override, so it's doing work, and Flag Reaper refuses to touch it.",
   "And it won't archive a flag while the code on main still calls it.",
-  "Once the pull request is merged, no references are left. It asks one last time, then archives the flag in Flagsmith.",
-  "Coding agents get the same scan as compact JSON, one line per flag, to keep tokens low. The included agent skill tells the agent to ask you in chat before every change."
+  "Once the pull request is merged, no references are left. It asks one last time, then archives the flag."
  ],
- "end": "That's Flag Reaper. Zero dependencies, works with Flagsmith Cloud and self hosted, and it's on GitHub now. Thanks for watching."
+ "agent_intro": "Now the same loop from a coding agent: Claude Code, with the Flag Reaper skill.",
+ "agent": [
+  "I ask it to clean up stale flags. It loads the skill, runs one compact scan, and asks which flags to touch.",
+  "I pick legacy banner. It previews the diff without writing anything, spots a dead line the rewriter left, since fixed, and asks for approval.",
+  "I approve. It applies the change with the CLI, removes that dead line, then commits, pushes, and opens pull request three. Archiving waits until the merge."
+ ],
+ "end": "That's Flag Reaper. Zero dependencies, an agent skill included, and it's on GitHub now. Thanks for watching."
 }

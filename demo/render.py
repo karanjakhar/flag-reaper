@@ -29,6 +29,7 @@ def tts(text: str):
     with wave.open(str(out)) as w:
         return out, w.getnframes() / w.getframerate()
 W, H, FPS = 1280, 720, 30
+SHOWN_STEPS = [0, 1, 3, 4, 5, 6, 7]  # indexes into transcript.json
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 MONO = ImageFont.truetype(FONT_DIR + "DejaVuSansMono.ttf", 15)
 MONO_B = ImageFont.truetype(FONT_DIR + "DejaVuSansMono-Bold.ttf", 15)
@@ -248,10 +249,10 @@ def main():
         ("Reads the Flagsmith Experimentation result, rolls out the winner,", DIM, 24, False),
         ("deletes the losing code in a PR, and archives the flag.", DIM, 24, False),
         ("A human approves every write.", PURPLE, 28, True),
-    ], "Toggle Wars · Flagsmith hackathon · Track 02 AI Agents & Feature Flags · Track 04 Agent Skills", 72)
+    ], "Toggle Wars · Flagsmith hackathon · Tracks 01 Test Something Real · 02 AI Agents · 04 Agent Skills", 72)
     black = Image.new("RGB", (W, H), BG)
     v.fade(black, title, 0.6)
-    v.hold_until(title, say("title") + 0.8, 5)
+    v.hold_until(title, say("title") + 0.6, 4)
 
     problem = card("The problem", [
         "An A/B test ends. Someone ships the winner to 100%.",
@@ -260,7 +261,7 @@ def main():
         ("Result: dead code, more paths to test, a flag dashboard nobody trusts.", RED, 26, False),
     ])
     v.fade(title, problem)
-    v.hold_until(problem, say("problem") + 0.8, 8)
+    v.hold_until(problem, say("problem") + 0.6, 4)
 
     loop = card("One loop, four steps", [
         ("1  scan\tread every flag from Flagsmith, find where the code uses it", FG, 24, False),
@@ -270,7 +271,7 @@ def main():
         ("It stops and asks before every change. Flags still in use are refused.", PURPLE, 24, True),
     ], "Everything in this video is live: Flagsmith Cloud, a real experiment, a real GitHub PR.")
     v.fade(problem, loop)
-    v.hold_until(loop, say("loop") + 0.8, 9)
+    v.hold_until(loop, say("loop") + 0.6, 4)
 
     how = card("The setup for this demo", [
         ("Flagsmith project demo-shop: 7 flags, 3 environments", FG, 25, False),
@@ -280,21 +281,38 @@ def main():
         ("Stale threshold set to 0 days so new flags qualify (default: 30)", YELLOW, 25, False),
     ], "Seed + traffic scripts are in the repo: demo/seed_flagsmith.py, demo/simulate_traffic.py")
     v.fade(loop, how)
-    v.hold_until(how, say("setup") + 0.8, 9)
+    v.hold_until(how, say("setup") + 0.6, 4)
 
+    # the live CLI run; the repeat scan and the JSON scan are left out to stay under 3 minutes
+    # (the agent section below shows the JSON scan in use)
+    steps = [steps[i] for i in SHOWN_STEPS]
     prev = how
     for i, s in enumerate(steps, 1):
         prev = play_step(v, s, i, len(steps), prev, narr["steps"][i - 1] if narr else None)
+
+    import render_agent  # noqa: E402  (imports this module for colours and fonts)
+    run = json.loads((HERE / "agent-run.json").read_text())
+    u = run["total_usage"]
+    agent = card("The same loop, from a coding agent", [
+        (f"Claude Code · {render_agent.model_name(run)} · skill: skills/flagsmith-flag-reaper", FG, 26, True),
+        ("A real session on the live project, recorded headless, not edited.", DIM, 24, False),
+        ("The agent passes --yes only after you approve that step in chat.", PURPLE, 24, True),
+    ])
+    v.fade(prev, agent)
+    v.hold_until(agent, say("agent_intro") + 0.4, 2.5)
+    prev = render_agent.play_agent(v, run, agent, narr["agent"] if narr else None)
 
     end = card("Flag Reaper", [
         ("github.com/karanjakhar/flag-reaper", PURPLE, 30, True),
         ("pip install git+https://github.com/karanjakhar/flag-reaper", FG, 22, False),
         ("Agent Skill included: skills/flagsmith-flag-reaper/SKILL.md, compact JSON, approval at every write", FG, 22, False),
-        ("Zero dependencies · 30 tests · MIT · Flagsmith Cloud & self-hosted", DIM, 22, False),
-        ("Demo PR: github.com/karanjakhar/flag-reaper-demo-shop/pull/2", DIM, 22, False),
+        (f"Agent run: {run['total_tokens']:,} tokens ({u['output_tokens']:,} output, "
+         f"{u['cache_read_input_tokens']:,} cached prompt reads) · demo/agent-run.json", DIM, 22, False),
+        ("Zero dependencies · 37 tests · MIT · Flagsmith Cloud & self-hosted", DIM, 22, False),
+        ("PRs opened in this video: flag-reaper-demo-shop #2 (CLI) and #3 (agent)", DIM, 22, False),
     ], "Built for Toggle Wars, the Flagsmith Experimentation Hackathon", 64)
     v.fade(prev, end, 0.6)
-    v.hold_until(end, say("end") + 1.5, 7)
+    v.hold_until(end, say("end") + 1.5, 6)
     v.close()
     if narr:
         mux_audio(v, out)

@@ -1,9 +1,6 @@
 """Render demo/agent-run.json (a recorded Claude Code session using the Agent Skill) into
-demo/flag-reaper-agent.mp4, in the same style as the main demo video. Silent, captioned.
-
-usage: python3 demo/render_agent.py
+the agent section of demo/flag-reaper-demo.mp4. Used by demo/render.py.
 """
-import json
 import re
 import textwrap
 from pathlib import Path
@@ -11,8 +8,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 import render
-from render import (BG, BAR, CYAN, DIM, FG, FPS, GREEN, H, LH, MONO, MONO_B, PURPLE, RED, SANS, TERM,
-                    TH, TW, TX, TY, W, YELLOW, Video, card)
+from render import (BG, BAR, CYAN, DIM, FG, GREEN, H, LH, MONO, MONO_B, PURPLE, RED, SANS, TERM,
+                    TH, TW, TX, TY, W, YELLOW)
 
 HERE = Path(__file__).resolve().parent
 COLS = render.COLS
@@ -113,69 +110,40 @@ def frame(lines, caption, label, cursor=False):
     return img
 
 
-def main():
-    run = json.loads((HERE / "agent-run.json").read_text())
-    out = HERE / "flag-reaper-agent.mp4"
-    v = Video(out)
-    u = run["total_usage"]
-    model = run["model"].replace("claude-", "Claude ").replace("-5-5", " 5.5").replace("sonnet", "Sonnet")
-
-    title = card("Flag Reaper as an Agent Skill", [
-        ("A real Claude Code session, recorded headless, nothing edited.", FG, 28, True),
-        (f"Agent: Claude Code · model: {model} · skill: skills/flagsmith-flag-reaper", DIM, 22, False),
-        ("Fresh clone of the demo shop, live Flagsmith project, no user hooks/plugins/MCP.", DIM, 22, False),
-        ("The agent passes --yes only after you approve that exact step in chat.", PURPLE, 24, True),
-    ], "Demo project seeded the day before, so FLAGREAPER_STALE_DAYS=0 (default 30).", 52)
-    v.fade(Image.new("RGB", (W, H), BG), title, 0.6)
-    v.hold(title, 6)
-
-    lines, prev = [], title
+def play_agent(v, run, prev, narr=None):
+    """Play the recorded agent session into Video `v`, one narration line per turn. Returns the last frame."""
+    lines = []
     total = len(run["turns"])
     for i, turn in enumerate(run["turns"]):
-        cap, label = CAPTIONS[i], f"turn {i + 1}/{total}"
+        cap, label = CAPTIONS[i], f"agent · turn {i + 1}/{total}"
         if lines:
             lines.append(("", FG, False))
         prompt = wrap("> " + turn["user"])
         first = frame(lines + [(prompt[0][:2], PURPLE, True)], cap, label, True)
         v.fade(prev, first, 0.3)
-        v.hold(first, 0.6)
-        # type the user's message
-        for li, pl in enumerate(prompt):
-            for k in range(3, len(pl) + 3, 3):
+        t_end = v.say(narr[i]) if narr else 0
+        v.hold(first, 0.4)
+        for pl in prompt:  # type the user's message
+            for k in range(4, len(pl) + 4, 4):
                 v.hold(frame(lines + [(pl[:k], PURPLE, True)], cap, label, True), 1 / 30)
             lines.append((pl, PURPLE, True))
-        v.hold(frame(lines, cap, label), 0.8)
+        v.hold(frame(lines, cap, label), 0.4)
         for ev in turn["events"]:
             lines.append(("", FG, False))
             new = event_lines(ev)
-            step = 0.05 if ev["kind"] == "result" else 0.09
+            step = 0.03 if ev["kind"] == "result" else 0.06
             for ln in new:
                 lines.append(ln)
                 v.hold(frame(lines, cap, label), step)
-            pause = {"tool": 0.6, "result": 1.2, "text": 0.4}[ev["kind"]]
-            if ev["kind"] == "text":  # time to read the agent's answer
-                pause = 2.0 + 0.18 * len(new)
-            v.hold(frame(lines, cap, label), pause)
+            v.hold(frame(lines, cap, label), {"tool": 0.3, "result": 0.5, "text": 0.5}[ev["kind"]])
         tu = turn["usage"]
         lines.append((f"  · turn {i + 1}: {tu['output_tokens']:,} output tokens, "
                       f"{tu['input_tokens'] + tu['cache_creation_input_tokens']:,} new input, "
                       f"{tu['cache_read_input_tokens']:,} cached", DIM, False))
         prev = frame(lines, cap, label)
-        v.hold(prev, 1.5)
-
-    end = card("Token count for this run", [
-        (f"{run['total_tokens']:,} tokens in total across 3 turns", FG, 32, True),
-        (f"output {u['output_tokens']:,} · new input {u['input_tokens'] + u['cache_creation_input_tokens']:,}"
-         f" · cache reads {u['cache_read_input_tokens']:,}", DIM, 24, False),
-        ("Cache reads are Claude Code's own prompt, re-read on every call.", DIM, 22, False),
-        ("The skill's part is small: one JSON line per flag, --dry-run instead of reading files.", DIM, 22, False),
-        (run["pr"].replace("https://", ""), PURPLE, 26, True),
-    ], "Full transcript with per-turn usage: demo/agent-run.json", 52)
-    v.fade(prev, end, 0.5)
-    v.hold(end, 7)
-    v.close()
-    print(f"{out}  {v.frames / FPS:.1f}s")
+        v.hold_until(prev, t_end + 0.6, 2.5)  # let the answer sit on screen while the line finishes
+    return prev
 
 
-if __name__ == "__main__":
-    main()
+def model_name(run):
+    return run["model"].replace("claude-sonnet-", "Claude Sonnet ").replace("-", ".")
